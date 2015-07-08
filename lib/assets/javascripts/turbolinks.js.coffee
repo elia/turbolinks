@@ -1,5 +1,6 @@
 pageCache               = {}
 cacheSize               = 10
+pageTransitionCache     = {}
 transitionCacheEnabled  = false
 progressBar             = null
 
@@ -28,15 +29,8 @@ fetch = (url) ->
   cacheCurrentPage()
   progressBar?.start()
 
-  if transitionCacheEnabled and cachedPage = transitionCacheFor(url.absolute)
-    fetchHistory cachedPage
-    fetchReplacement url, null, false
-  else
-    fetchReplacement url, resetScrollPosition
-
-transitionCacheFor = (url) ->
-  cachedPage = pageCache[url]
-  cachedPage if cachedPage and !cachedPage.transitionCacheDisabled
+  fetchCached url if transitionCacheEnabled
+  fetchReplacement url, resetScrollPosition
 
 enableTransitionCache = (enable = true) ->
   transitionCacheEnabled = enable
@@ -48,6 +42,16 @@ enableProgressBar = (enable = true) ->
   else
     progressBar?.uninstall()
     progressBar = null
+
+fetchCached = (url) ->
+  cachedPage = pageTransitionCache[url.absolute]
+
+  if cachedPage and doc = createDocument(cachedPage)
+    reflectNewUrl url
+    changePage extractTitleAndBody(doc)...
+    manuallyTriggerHashChangeForFirefox()
+    onLoadFunction?()
+    triggerEvent EVENTS.RESTORE
 
 fetchReplacement = (url, onLoadFunction, showProgressBar = true) ->
   triggerEvent EVENTS.FETCH, url: url.absolute
@@ -61,7 +65,7 @@ fetchReplacement = (url, onLoadFunction, showProgressBar = true) ->
   xhr.onload = ->
     triggerEvent EVENTS.RECEIVE, url: url.absolute
 
-    if doc = processResponse()
+    if doc = processResponse(xhr, url)
       reflectNewUrl url
       reflectRedirectedUrl()
       changePage extractTitleAndBody(doc)...
@@ -101,7 +105,6 @@ cacheCurrentPage = ->
     positionY:                window.pageYOffset,
     positionX:                window.pageXOffset,
     cachedAt:                 new Date().getTime(),
-    transitionCacheDisabled:  document.querySelector('[data-no-transition-cache]')?
 
   constrainPageCacheTo cacheSize
 
@@ -220,7 +223,7 @@ triggerEvent = (name, data) ->
 pageChangePrevented = (url) ->
   !triggerEvent EVENTS.BEFORE_CHANGE, url: url
 
-processResponse = ->
+processResponse = (xhr, url)->
   clientOrServerError = ->
     400 <= xhr.status < 600
 
@@ -244,6 +247,8 @@ processResponse = ->
   if not clientOrServerError() and validContent()
     doc = createDocument xhr.responseText
     if doc and !assetsChanged doc
+      unless transitionCacheDisabled = doc.querySelector('[data-no-transition-cache]')?
+        pageTransitionCache[url.absolute] = xhr.responseText
       return doc
 
 extractTitleAndBody = (doc) ->
