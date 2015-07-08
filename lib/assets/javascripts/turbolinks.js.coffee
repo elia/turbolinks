@@ -46,7 +46,7 @@ enableProgressBar = (enable = true) ->
 fetchCached = (url) ->
   cachedPage = pageTransitionCache[url.absolute]
 
-  if cachedPage and doc = createDocument(cachedPage)
+  if cachedPage and doc = createDocument(cachedPage.responseText)
     reflectNewUrl url
     changePage extractTitleAndBody(doc)...
     manuallyTriggerHashChangeForFirefox()
@@ -112,15 +112,19 @@ pagesCached = (size = cacheSize) ->
   cacheSize = parseInt(size) if /^[\d]+$/.test size
 
 constrainPageCacheTo = (limit) ->
-  pageCacheKeys = Object.keys pageCache
+  constrainCacheTo limit, pageCache, (data)->
+    triggerEvent EVENTS.EXPIRE, data
 
-  cacheTimesRecentFirst = pageCacheKeys.map (url) ->
-    pageCache[url].cachedAt
+constrainCacheTo = (limit, cache, expireCallback) ->
+  cacheKeys = Object.keys cache
+
+  cacheTimesRecentFirst = cacheKeys.map (url) ->
+    cache[url].cachedAt
   .sort (a, b) -> b - a
 
-  for key in pageCacheKeys when pageCache[key].cachedAt <= cacheTimesRecentFirst[limit]
-    triggerEvent EVENTS.EXPIRE, pageCache[key]
-    delete pageCache[key]
+  for key in cacheKeys when cache[key].cachedAt <= cacheTimesRecentFirst[limit]
+    expireCallback?(cache[key])
+    delete cache[key]
 
 changePage = (title, body, csrfToken, runScripts) ->
   triggerEvent EVENTS.BEFORE_UNLOAD
@@ -248,7 +252,10 @@ processResponse = (xhr, url)->
     doc = createDocument xhr.responseText
     if doc and !assetsChanged doc
       unless transitionCacheDisabled = doc.querySelector('[data-no-transition-cache]')?
-        pageTransitionCache[url.absolute] = xhr.responseText
+        pageTransitionCache[url.absolute] =
+          responseText: xhr.responseText
+          cachedAt:     new Date().getTime()
+        constrainCacheTo(cacheSize, pageTransitionCache)
       return doc
 
 extractTitleAndBody = (doc) ->
